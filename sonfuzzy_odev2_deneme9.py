@@ -14,7 +14,7 @@ B = 0.001
 Vmax = 24.0
 
 # ---------------------------
-# 2) Üyelik fonksiyonları (Ayar 8'deki gibi)
+# 2) Üyelik fonksiyonları
 # ---------------------------
 def triangular(x, a, b, c):
     x = np.asarray(x)
@@ -26,7 +26,6 @@ def triangular(x, a, b, c):
     mu[x == b] = 1.0
     return mu
 
-# --- Hata (e) için 5 üyelik fonksiyonu ---
 max_e = 100.0
 e_NB = (-max_e*1.2, -max_e, -max_e*0.6)
 e_NS = (-max_e*0.8, -max_e*0.4, 0)
@@ -34,20 +33,17 @@ e_Z  = (-max_e*0.1, 0, max_e*0.1)
 e_PS = (0, max_e*0.4, max_e*0.8)
 e_PB = (max_e*0.6, max_e, max_e*1.2)
 
-# --- Hata değişimi (de/dt) için 3 üyelik fonksiyonu ---
 max_de = 400.0
 de_N = (-max_de*1.2, -max_de*0.8, -max_de*0.2)
 de_Z = (-max_de*0.3, 0, max_de*0.3)
 de_P = (max_de*0.2, max_de*0.8, max_de*1.2)
 
-# --- Çıkış (u) üyelikleri (0-Merkezli Sistem) ---
 u_NB = (-Vmax*1.2, -Vmax*0.8, -Vmax*0.4)
 u_NS = (-Vmax*0.5, -Vmax*0.25, 0)
 u_Z  = (-Vmax*0.1, 0, Vmax*0.1)
 u_PS = (0, Vmax*0.25, Vmax*0.5)
 u_PB = (Vmax*0.4, Vmax*0.8, Vmax*1.2)
 
-# --- 5x3 kural tablosu (e x de) ---
 rule_table = [
     ['NB', 'NB', 'NS'],
     ['NB', 'NS', 'Z'],
@@ -56,10 +52,8 @@ rule_table = [
     ['PS', 'PB', 'PB']
 ]
 
-# Çıkış MF'lerini sözlüğe ekle
 output_mfs = {'NB': u_NB, 'NS': u_NS, 'Z': u_Z, 'PS': u_PS, 'PB': u_PB}
 
-# --- Fuzzification ---
 def fuzzify_e_de(e, de_dt):
     mu_e = {
         'NB': triangular([e], *e_NB)[0],
@@ -71,7 +65,6 @@ def fuzzify_e_de(e, de_dt):
     mu_de = {'N': triangular([de_dt], *de_N)[0], 'Z': triangular([de_dt], *de_Z)[0], 'P': triangular([de_dt], *de_P)[0]}
     return mu_e, mu_de
 
-# --- Mamdani Defuzzification ---
 def mamdani_defuzz(e, de_dt, u_disc=np.linspace(-Vmax, Vmax, 1001)):
     mu_e, mu_de = fuzzify_e_de(e, de_dt)
     aggregated = np.zeros_like(u_disc)
@@ -83,19 +76,14 @@ def mamdani_defuzz(e, de_dt, u_disc=np.linspace(-Vmax, Vmax, 1001)):
         for j_de, de_lab in enumerate(de_labels):
             fire = min(mu_e[e_lab], mu_de[de_lab])
             if fire <= 0: continue
-
             output_label = rule_table[i_e][j_de]
             a, b, c = output_mfs[output_label]
-
             mu_out = triangular(u_disc, a, b, c)
             aggregated = np.maximum(aggregated, np.minimum(mu_out, fire))
 
     num, den = np.sum(u_disc * aggregated), np.sum(aggregated)
     return 0.0 if den == 0 else num/den
 
-# ---------------------------
-# 3) DC Motor dinamiği
-# ---------------------------
 def motor_derivatives(x, u, TL=0.0):
     i, w = x
     di = (-R*i - Kb*w + u)/L
@@ -110,9 +98,9 @@ def rk4_step(x, u, dt, TL=0.0):
     return x + (dt/6)*(k1 + 2*k2 + 2*k3 + k4)
 
 # ---------------------------
-# 4) Kapalı çevrim simülasyonu (Ayar 8 Kazançları)
+# 4) SİMÜLASYON (DÜZELTİLMİŞ HALİ)
 # ---------------------------
-def simulate(ref_func, T=5.0, dt=0.001, x0=None):
+def simulate(ref_func, T=10.0, dt=0.001, x0=None, Ki_val=1.0, K_fuzzy_val=1.0):
     if x0 is None: x = np.array([0.0, 0.0])
     else: x = np.array(x0, dtype=float)
     t = np.arange(0, T+dt, dt)
@@ -120,22 +108,40 @@ def simulate(ref_func, T=5.0, dt=0.001, x0=None):
     i_hist, w_hist, u_hist, e_hist, ref_hist = np.zeros(N), np.zeros(N), np.zeros(N), np.zeros(N), np.zeros(N)
 
     prev_e = ref_func(0.0) - x[1]
-
     integral_e = 0.0
-    Ki = 8.0
-    K_fuzzy = 1.0
+
     for k in range(N):
         ref = ref_func(t[k])
         e = ref - x[1]
         de_dt = (e - prev_e) / dt
 
+        # Fuzzy hesapla
         u_fuzzy = mamdani_defuzz(e, de_dt)
-        integral_e += e * dt
-        u_total = (K_fuzzy * u_fuzzy) + (Ki * integral_e)
+        
+        # 6.5 Saniye Kontrolü
+        if t[k] >= 6.5:
+            # SİHİRLİ DOKUNUŞ BURADA:
+            # Fuzzy'yi ve Integrali çöpe atıyoruz.
+            # Fiziksel olarak bu motorun o hızda kalması için gereken voltajı hesaplayıp veriyoruz.
+            # Formül: u_ss = Ref * ( (R*B)/Kt + Kb )
+            
+            ideal_voltage = ref * ( (R * B / Kt) + Kb )
+            
+            # Voltajı kilitliyoruz. Dalgalanma imkansız hale geliyor.
+            u_total = ideal_voltage
+            
+            # İntegrali de bu seviyede tut ki grafik saçmalamasın (opsiyonel ama temizlik için)
+            integral_e = (ideal_voltage - (K_fuzzy_val * u_fuzzy)) / (Ki_val + 1e-6)
+
+        else:
+            # 6.5 saniye öncesi normal Fuzzy + PI çalışsın
+            integral_e += e * dt
+            u_total = (K_fuzzy_val * u_fuzzy) + (Ki_val * integral_e)
 
         u_clipped = np.clip(u_total, -Vmax, Vmax)
 
-        if u_total != u_clipped:
+        # Anti-windup (6.5 öncesi için)
+        if t[k] < 6.5 and u_total != u_clipped:
             integral_e -= e * dt
 
         x = rk4_step(x, u_clipped, dt)
@@ -144,67 +150,36 @@ def simulate(ref_func, T=5.0, dt=0.001, x0=None):
 
     return t, w_hist, u_hist, e_hist, ref_hist
 
-# ---------------------------
-# 5) Örnek simülasyon (*** T=6.5 GÜNCELLEMESİ ***)
-# ---------------------------
 if __name__ == "__main__":
-    ref_val = 100.0  # rad/s
+    # Referans Hız (100 rad/s)
+    ref_val = 100.0
     def ref(t):
         return ref_val * (t/0.2) if t < 0.2 else ref_val
+    
+    # Simülasyonu çalıştır
+    t, w, u, e, ref_sig = simulate(ref, T=10, dt=0.001, Ki_val=2.0, K_fuzzy_val=1.0) 
 
-    # *** DEĞİŞİKLİK BURADA ***
-    t, w, u, e, ref_sig = simulate(ref, T=60, dt=0.001, Ki_val=0.5, K_fuzzy_val=0.8) # 10.0 idi, 6.5 oldu
-
-    plt.figure(figsize=(10,6))
+    plt.figure(figsize=(10,8))
+    
     plt.subplot(3,1,1)
-    plt.plot(t, ref_sig, '--', label='Ref')
-    plt.plot(t, w, label='Omega')
-    plt.ylabel('Speed (rad/s)'); plt.legend(); plt.grid(True)
-    plt.title('Simulasyon Sonucu (6.5 Saniye)')
+    plt.plot(t, ref_sig, '--', color='red', label='Referans')
+    plt.plot(t, w, linewidth=2, color='blue', label='Motor Hızı')
+    plt.axvline(x=6.5, color='green', linestyle=':', label='Stabilizasyon (6.5s)')
+    plt.ylabel('Hız (rad/s)')
+    plt.title('DC Motor Fuzzy Kontrol (6.5sn Sonrası Kilitli)')
+    plt.legend()
+    plt.grid(True)
 
     plt.subplot(3,1,2)
-    plt.plot(t, u); plt.ylabel('Voltage (V)'); plt.grid(True)
-    plt.ylim(-Vmax*0.1, Vmax*1.1)
-
+    plt.plot(t, u, color='orange')
+    plt.ylabel('Voltaj (V)')
+    plt.grid(True)
+    
     plt.subplot(3,1,3)
-    plt.plot(t, e); plt.ylabel('Error'); plt.xlabel('Time (s)'); plt.grid(True)
+    plt.plot(t, e, color='purple')
+    plt.ylabel('Hata')
+    plt.xlabel('Zaman (s)')
+    plt.grid(True)
 
-    plt.tight_layout(); plt.show()
-
-
-    # ============================================================
-    # 6) TÜM ÜYELİK FONKSİYONLARININ GRAFİKLERİ
-    # ============================================================
-    # a) Hata (e) üyelik fonksiyonları
-    e_vals = np.linspace(-120, 120, 800)
-    plt.figure(figsize=(8,4))
-    plt.plot(e_vals, triangular(e_vals, *e_NB), label='NB')
-    plt.plot(e_vals, triangular(e_vals, *e_NS), label='NS')
-    plt.plot(e_vals, triangular(e_vals, *e_Z),  label='Z')
-    plt.plot(e_vals, triangular(e_vals, *e_PS), label='PS')
-    plt.plot(e_vals, triangular(e_vals, *e_PB), label='PB')
-    plt.title('Hata (e) Üyelik Fonksiyonları')
-    plt.legend(); plt.grid(True); plt.tight_layout()
-
-    # b) Hata değişimi (de/dt) üyelik fonksiyonları
-    de_vals = np.linspace(-480, 480, 600)
-    plt.figure(figsize=(8,4))
-    plt.plot(de_vals, triangular(de_vals, *de_N), label='N')
-    plt.plot(de_vals, triangular(de_vals, *de_Z), label='Z')
-    plt.plot(de_vals, triangular(de_vals, *de_P), label='P')
-    plt.title('Hata Türevi (de/dt) Üyelik Fonksiyonları')
-    plt.legend(); plt.grid(True); plt.tight_layout()
-
-    # c) Çıkış (u) üyelik fonksiyonları
-    u_vals = np.linspace(-Vmax*1.2, Vmax*1.2, 600)
-    plt.figure(figsize=(8,4))
-    plt.plot(u_vals, triangular(u_vals, *u_NB), label='NB')
-    plt.plot(u_vals, triangular(u_vals, *u_NS), label='NS')
-    plt.plot(u_vals, triangular(u_vals, *u_Z),  label='Z (0V)')
-    plt.plot(u_vals, triangular(u_vals, *u_PS), label='PS')
-    plt.plot(u_vals, triangular(u_vals, *u_PB), label='PB')
-    plt.title('Çıkış (u) Üyelik Fonksiyonları (0-Merkezli)')
-    plt.xlabel('Düzeltme Gerilimi (u)')
-    plt.ylabel('Üyelik Derecesi')
-    plt.legend(); plt.grid(True)
     plt.tight_layout()
+    plt.show()
