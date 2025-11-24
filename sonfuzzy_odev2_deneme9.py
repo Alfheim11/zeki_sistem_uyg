@@ -153,7 +153,7 @@ if __name__ == "__main__":
         return ref_val * (t/0.2) if t < 0.2 else ref_val
 
     # *** DEĞİŞİKLİK BURADA ***
-    t, w, u, e, ref_sig = simulate(ref, T=6.5, dt=0.001) # 10.0 idi, 6.5 oldu
+    t, w, u, e, ref_sig = simulate(ref, T=6.5, dt=0.001, Ki_val=0.5, K_fuzzy_val=0.8) # 10.0 idi, 6.5 oldu
 
     plt.figure(figsize=(10,6))
     plt.subplot(3,1,1)
