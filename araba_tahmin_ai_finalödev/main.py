@@ -7,10 +7,10 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox, simpledialog
 from PIL import Image
 from sklearn.neighbors import KNeighborsClassifier
-from ultralytics import YOLO  # İŞTE YENİ SİLAHIMIZ
+from ultralytics import YOLO  
 
 # --- DERİN ÖĞRENME ---
-# Tensorflow uyarılarını susturalım
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
 from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input
 from tensorflow.keras.preprocessing import image
@@ -27,7 +27,7 @@ ctk.set_default_color_theme("blue")
 
 # Global Değişkenler
 feature_extractor = None
-knn_clf = None  # DİKKAT: Değişkenin asıl adı bu!
+knn_clf = None  
 yolo_model = None 
 stored_features = []
 stored_labels = []
@@ -218,7 +218,7 @@ class ProCarAI(ctk.CTk):
         elif avg_dist > SIMILARITY_THRESHOLD:
             res_text = "❌ TANIMLANAMADI"
             color = "red"
-            # Thread içinde messagebox açmak bazen tkinter'ı kilitler ama deneyelim
+           
             # İdeal olan ana thread'e sinyal göndermektir.
         else:
             res_text = f"✅ TAHMİN: {prediction}"
@@ -248,3 +248,4 @@ class ProCarAI(ctk.CTk):
 if __name__ == "__main__":
     app = ProCarAI()
     app.mainloop()
+
