@@ -1,0 +1,3 @@
+Kullanılan kütüphaneler yüzünden fotoğraflarda bulunan arabalar dışında çevre koşulları da hesaplandığı için fotoğraf eşleşmede ve araba tahmin etmelerde başarı yüzdeleri çok düşük kalmaktadır.
+
+Programın düzgün ve doğruluk seviyesinin yüksek olması için fotoğraflardan tek tek sadece arabaların kırpılıp kaydedilmesi lazım, bu işlem çok uzun süreceği için yapılmamıştır.
