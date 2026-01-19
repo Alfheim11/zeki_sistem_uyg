@@ -23,7 +23,7 @@ DATABASE_DIR = "vehicle_database"
 MODEL_FILE = "neurocar_model.keras" 
 IMG_SIZE = (224, 224) 
 BATCH_SIZE = 8       
-EPOCHS = 40          # İSTEDİĞİN GİBİ 40 YAPTIK (Daha uzun sürer ama daha iyi öğrenir)
+EPOCHS = 40          #(Daha uzun sürer ama daha iyi öğrenir)
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("dark-blue")
@@ -270,4 +270,5 @@ class NeuroCarApp(ctk.CTk):
 
 if __name__ == "__main__":
     app = NeuroCarApp()
+
     app.mainloop()
