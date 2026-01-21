@@ -8,6 +8,12 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox, simpledialog
 from PIL import Image
 
+# --- Grafik ve Analiz Kütüphaneleri ---
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+import seaborn as sns
+
 # --- TensorFlow Ayarları ---
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' 
 
@@ -23,7 +29,7 @@ DATABASE_DIR = "vehicle_database"
 MODEL_FILE = "neurocar_model.keras" 
 IMG_SIZE = (224, 224) 
 BATCH_SIZE = 8       
-EPOCHS = 40          #(Daha uzun sürer ama daha iyi öğrenir)
+EPOCHS = 40          # Fine-Tuning için 40 idealdir
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("dark-blue")
@@ -31,12 +37,13 @@ ctk.set_default_color_theme("dark-blue")
 class NeuroCarApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("NeuroCar - AI Vehicle Recognition System")
+        self.title("NeuroCar Pro - Advanced Analysis System")
         self.geometry("1100x850")
         
         self.model = None
         self.class_names = [] 
         self.is_training = False
+        self.history = None # Grafik verileri burada tutulacak
 
         # --- BAŞLIK ---
         self.lbl_head = ctk.CTkLabel(self, text="NEUROCAR | DERİN ÖĞRENME ANALİZ SİSTEMİ", font=("Segoe UI", 26, "bold"))
@@ -64,33 +71,39 @@ class NeuroCarApp(ctk.CTk):
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(pady=20)
 
-        # Butonlar
         self.btn_predict = ctk.CTkButton(
             btn_frame, text="GÖRÜNTÜ ANALİZİ YAP", 
             command=self.predict_image, 
-            width=220, height=50, 
-            font=("Segoe UI", 13, "bold"),
+            width=200, height=50, font=("Segoe UI", 13, "bold"),
             fg_color="#3498db", hover_color="#2980b9"
         )
-        self.btn_predict.pack(side="left", padx=15)
+        self.btn_predict.pack(side="left", padx=10)
 
         self.btn_add = ctk.CTkButton(
             btn_frame, text="VERİ SETİNE EKLE", 
             command=self.add_data, 
-            width=180, height=50, 
-            font=("Segoe UI", 13, "bold"),
+            width=180, height=50, font=("Segoe UI", 13, "bold"),
             fg_color="#e67e22", hover_color="#d35400"
         )
-        self.btn_add.pack(side="left", padx=15)
+        self.btn_add.pack(side="left", padx=10)
         
         self.btn_train = ctk.CTkButton(
-            btn_frame, text="MODEL EĞİTİMİNİ BAŞLAT", 
+            btn_frame, text="MODELİ EĞİT (Fine-Tune)", 
             command=self.start_training, 
-            width=220, height=50, 
-            font=("Segoe UI", 13, "bold"),
+            width=200, height=50, font=("Segoe UI", 13, "bold"),
             fg_color="#27ae60", hover_color="#2ecc71"
         )
-        self.btn_train.pack(side="left", padx=15)
+        self.btn_train.pack(side="left", padx=10)
+        
+        # Sonuçları göster butonu (Eğitim bitince aktif olur)
+        self.btn_results = ctk.CTkButton(
+            btn_frame, text="SONUÇ GRAFİKLERİ", 
+            command=self.show_results_window, 
+            width=180, height=50, font=("Segoe UI", 13, "bold"),
+            fg_color="#8e44ad", hover_color="#9b59b6",
+            state="disabled" # Başlangıçta pasif
+        )
+        self.btn_results.pack(side="left", padx=10)
 
         # Başlangıç Yüklemesi
         threading.Thread(target=self.load_trained_model, daemon=True).start()
@@ -112,13 +125,10 @@ class NeuroCarApp(ctk.CTk):
         marka = simpledialog.askstring("Veri Girişi", "Araç Marka/Model (Örn: BMW_M5):")
         if not marka: return
         marka = marka.strip().replace(" ", "_").upper()
-        
         files = filedialog.askopenfilenames(title="Eğitim Görsellerini Seçiniz")
         if not files: return
-        
         target_dir = os.path.join(DATABASE_DIR, marka)
         os.makedirs(target_dir, exist_ok=True)
-        
         count = 0
         for f in files:
             try:
@@ -128,9 +138,7 @@ class NeuroCarApp(ctk.CTk):
                 shutil.copy(f, os.path.join(target_dir, new_name))
                 count += 1
             except: pass
-            
-        messagebox.showinfo("Tamamlandı", f"{count} görsel eklendi. Lütfen modeli eğitin.")
-        self.lbl_status.configure(text="Veri seti güncellendi. Yeniden eğitim gerekli.", text_color="#f39c12")
+        messagebox.showinfo("Tamamlandı", f"{count} görsel eklendi. Modeli eğitin.")
 
     def start_training(self):
         if self.is_training: return
@@ -139,21 +147,20 @@ class NeuroCarApp(ctk.CTk):
             return
 
         self.is_training = True
-        self.btn_train.configure(state="disabled", text="Eğitim Sürüyor (Bekleyiniz)...")
+        self.btn_train.configure(state="disabled", text="Eğitim Sürüyor...")
+        self.btn_results.configure(state="disabled") # Yeni eğitim başlarken grafikleri kapat
         self.progressbar.start()
-        
-        # Eğitimi thread içinde başlat
         threading.Thread(target=self.train_cnn_model, daemon=True).start()
 
     def train_cnn_model(self):
         try:
-            self.lbl_status.configure(text="Veri seti işleniyor ve artırılıyor...", text_color="#3498db")
+            self.lbl_status.configure(text="Veri seti işleniyor... (Fine-Tuning)", text_color="#3498db")
             
-            # Veri Artırma
+            # --- VERİ ARTIRMA (AUGMENTATION) ---
             train_datagen = ImageDataGenerator(
                 preprocessing_function=preprocess_input,
-                rotation_range=30, width_shift_range=0.2, height_shift_range=0.2,
-                shear_range=0.2, zoom_range=0.2, horizontal_flip=True, fill_mode='nearest',
+                rotation_range=15, width_shift_range=0.1, height_shift_range=0.1,
+                shear_range=0.1, zoom_range=0.1, horizontal_flip=True, fill_mode='nearest',
                 validation_split=0.2
             )
 
@@ -170,25 +177,32 @@ class NeuroCarApp(ctk.CTk):
             num_classes = len(train_generator.class_indices)
             self.class_names = list(train_generator.class_indices.keys())
 
-            self.lbl_status.configure(text="GoogLeNet mimarisi kuruluyor...", text_color="#3498db")
+            self.lbl_status.configure(text="GoogLeNet Fine-Tuning ayarlanıyor...", text_color="#3498db")
             
-            # Model Mimarisi
+            # --- MODEL KURULUMU (TRANSFER LEARNING) ---
             base_model = InceptionV3(weights='imagenet', include_top=False, input_shape=(IMG_SIZE[0], IMG_SIZE[1], 3))
+            
+            # Fine-Tuning Ayarları
+            base_model.trainable = True
+            fine_tune_at = 250
+            for layer in base_model.layers[:fine_tune_at]:
+                layer.trainable = False
+            
             x = base_model.output
             x = GlobalAveragePooling2D()(x)
             x = Dense(1024, activation='relu')(x)
-            x = Dropout(0.5)(x) 
+            x = Dropout(0.5)(x)
             predictions = Dense(num_classes, activation='softmax')(x)
 
             model = Model(inputs=base_model.input, outputs=predictions)
-            for layer in base_model.layers: layer.trainable = False
-
-            model.compile(optimizer=Adam(learning_rate=0.0001), loss='categorical_crossentropy', metrics=['accuracy'])
-
-            self.lbl_status.configure(text=f"Eğitim Başladı ({EPOCHS} Epoch)... Bu işlem uzun sürecektir.", text_color="#f1c40f")
             
-            # --- EĞİTİM ---
-            history = model.fit(
+            # Learning Rate Düşük (0.00001) - İnce Ayar için
+            model.compile(optimizer=Adam(learning_rate=0.00001), loss='categorical_crossentropy', metrics=['accuracy'])
+
+            self.lbl_status.configure(text=f"Eğitim Başladı ({EPOCHS} Epoch)...", text_color="#f1c40f")
+            
+            # --- EĞİTİMİ BAŞLAT VE HISTORY KAYDET ---
+            self.history = model.fit(
                 train_generator,
                 validation_data=validation_generator,
                 epochs=EPOCHS
@@ -198,9 +212,29 @@ class NeuroCarApp(ctk.CTk):
             model.save(MODEL_FILE)
             self.model = model
             
-            final_acc = history.history['accuracy'][-1] * 100
+            final_acc = self.history.history['accuracy'][-1] * 100
             self.lbl_status.configure(text=f"Eğitim Bitti | Başarı: %{final_acc:.1f}", text_color="#2ecc71")
-            messagebox.showinfo("Başarılı", f"Eğitim tamamlandı!\nModel Başarısı: %{final_acc:.1f}")
+            
+            # --- CONFUSION MATRIX HAZIRLIĞI ---
+            # Confusion Matrix için verileri shuffle yapmadan tekrar çekmemiz lazım
+            self.lbl_status.configure(text="Analiz Matrisi Oluşturuluyor...", text_color="#f1c40f")
+            
+            # Matris için test verisi (Shuffle KAPALI olmalı ki etiketler kaymasın)
+            val_gen_matrix = ImageDataGenerator(preprocessing_function=preprocess_input, validation_split=0.2).flow_from_directory(
+                DATABASE_DIR, target_size=IMG_SIZE, batch_size=BATCH_SIZE,
+                class_mode='categorical', subset='validation', shuffle=False
+            )
+            
+            # Tahminleri al
+            preds = model.predict(val_gen_matrix)
+            self.y_pred = np.argmax(preds, axis=1) # Tahmin edilenler
+            self.y_true = val_gen_matrix.classes       # Gerçekler
+            self.matrix_class_names = list(val_gen_matrix.class_indices.keys())
+
+            messagebox.showinfo("Başarılı", "Eğitim tamamlandı! Sonuç butonuna basarak grafikleri görebilirsiniz.")
+            
+            # Butonu aktif et
+            self.btn_results.configure(state="normal", fg_color="#9b59b6")
 
         except Exception as e:
             print(f"Hata: {e}")
@@ -210,65 +244,100 @@ class NeuroCarApp(ctk.CTk):
         finally:
             self.progressbar.stop()
             self.is_training = False
-            self.btn_train.configure(state="normal", text="MODEL EĞİTİMİNİ BAŞLAT")
+            self.btn_train.configure(state="normal", text="MODELİ EĞİT (Fine-Tune)")
+
+    def show_results_window(self):
+        """Hocaya Gösterilecek Analiz Penceresi"""
+        if not self.history: return
+
+        # Yeni pencere
+        res_window = ctk.CTkToplevel(self)
+        res_window.title("Eğitim Performans Analizi")
+        res_window.geometry("1000x600")
+        res_window.focus()
+
+        # Sekmeli Yapı
+        tabview = ctk.CTkTabview(res_window)
+        tabview.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        tab_graphs = tabview.add("1. Başarı Grafikleri (Epochs)")
+        tab_matrix = tabview.add("2. Confusion Matrix (Karışıklık)")
+
+        # --- TAB 1: EPOCH GRAFİKLERİ ---
+        fig1, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
+        
+        # Accuracy Grafiği
+        ax1.plot(self.history.history['accuracy'], label='Eğitim Başarısı', linewidth=2)
+        ax1.plot(self.history.history['val_accuracy'], label='Doğrulama Başarısı', linewidth=2, linestyle='--')
+        ax1.set_title('Model Doğruluğu (Accuracy)')
+        ax1.set_xlabel('Epoch')
+        ax1.set_ylabel('Başarı Oranı')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # Loss Grafiği
+        ax2.plot(self.history.history['loss'], label='Eğitim Hatası', color='red', linewidth=2)
+        ax2.plot(self.history.history['val_loss'], label='Doğrulama Hatası', color='orange', linewidth=2, linestyle='--')
+        ax2.set_title('Model Hatası (Loss)')
+        ax2.set_xlabel('Epoch')
+        ax2.set_ylabel('Hata Değeri')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+        canvas1 = FigureCanvasTkAgg(fig1, master=tab_graphs)
+        canvas1.draw()
+        canvas1.get_tk_widget().pack(fill="both", expand=True)
+
+        # --- TAB 2: CONFUSION MATRIX ---
+        fig2, ax3 = plt.subplots(figsize=(8, 6))
+        
+        cm = confusion_matrix(self.y_true, self.y_pred)
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                    xticklabels=self.matrix_class_names, 
+                    yticklabels=self.matrix_class_names, ax=ax3)
+        
+        ax3.set_title('Confusion Matrix\n(Köşegenler Doğru Tahminlerdir)')
+        ax3.set_xlabel('Tahmin Edilen')
+        ax3.set_ylabel('Gerçek Olan')
+
+        canvas2 = FigureCanvasTkAgg(fig2, master=tab_matrix)
+        canvas2.draw()
+        canvas2.get_tk_widget().pack(fill="both", expand=True)
+
 
     def predict_image(self):
         if self.model is None:
             messagebox.showwarning("Model Bulunamadı", "Lütfen önce model eğitimini tamamlayınız.")
             return
-
         file_path = filedialog.askopenfilename()
         if not file_path: return
-
         try:
-            # Görüntü Yükleme ve Ön İşleme
             img_original = Image.open(file_path)
-            
-            # PNG/Şeffaflık Düzeltmesi
-            if img_original.mode != 'RGB':
-                img_original = img_original.convert('RGB')
-
-            # Arayüzde Gösterim
+            if img_original.mode != 'RGB': img_original = img_original.convert('RGB')
             ratio = min(800/img_original.width, 450/img_original.height)
             new_size = (int(img_original.width*ratio), int(img_original.height*ratio))
             ctk_img = ctk.CTkImage(img_original, size=new_size)
             self.img_panel.configure(image=ctk_img, text="")
-
-            # Modele Hazırlık
             img = img_original.resize(IMG_SIZE)
             x = tf.keras.preprocessing.image.img_to_array(img)
             x = np.expand_dims(x, axis=0)
             x = preprocess_input(x)
-
-            # Tahmin
             preds = self.model.predict(x)
             score = np.max(preds)
             class_idx = np.argmax(preds)
-            
             if class_idx < len(self.class_names):
                 class_name = self.class_names[class_idx].replace("_", " ")
                 confidence_val = score * 100
-                
-                if score > 0.6:
-                    res_text = f"TESPİT EDİLDİ: {class_name}"
-                    color = "#2ecc71"
-                else:
-                    res_text = f"OLASI EŞLEŞME: {class_name} (?)"
-                    color = "#e67e22"
-                
+                res_text = f"TESPİT EDİLDİ: {class_name}"
+                color = "#2ecc71" if score > 0.6 else "#e67e22"
                 status_text = f"{res_text} | Güven Oranı: %{confidence_val:.2f}"
             else:
-                status_text = "Tanımlanamayan Araç"
-                color = "#e74c3c"
-
+                status_text, color = "Tanımlanamayan Araç", "#e74c3c"
             self.lbl_status.configure(text=status_text, text_color=color)
-            print(f"Tahmin Skoru: {preds}")
-
         except Exception as e:
             self.lbl_status.configure(text=f"Analiz Hatası: {e}", text_color="#e74c3c")
             messagebox.showerror("Hata", str(e))
 
 if __name__ == "__main__":
     app = NeuroCarApp()
-
     app.mainloop()
